@@ -15,16 +15,33 @@ install_sample() {
   adb shell svc power stayon true
   adb shell settings put system screen_off_timeout 1800000
   adb shell settings put global ambient_enabled 0 || true
+  # The emulator reports a charger, and Wear OS then covers every app with its charging screen.
+  adb shell dumpsys battery unplug
+  adb shell dumpsys battery set ac 0
+  adb shell dumpsys battery set usb 0
+  adb shell dumpsys battery set wireless 0 || true
+  adb shell dumpsys battery set level 80
   adb shell input keyevent KEYCODE_WAKEUP
   sleep 20
   dismiss_system_dialogs
 }
 
+sample_in_front() {
+  adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" | grep -q "$PKG"
+}
+
 fresh_launch() {
   adb shell pm clear "$PKG" > /dev/null
   adb shell input keyevent KEYCODE_WAKEUP
-  adb shell am start -W -n "$PKG/.MainActivity" "$@" > /dev/null
-  sleep 8
+  for _ in 1 2 3; do
+    adb shell am start -W -n "$PKG/.MainActivity" "$@" > /dev/null
+    sleep 8
+    sample_in_front && return 0
+    # Something system-side (charging screen, watch face) came up on top: go back and launch again.
+    adb shell input keyevent KEYCODE_BACK
+    adb shell input keyevent KEYCODE_WAKEUP
+    sleep 3
+  done
 }
 
 dismiss_system_dialogs() {
@@ -45,7 +62,7 @@ dismiss_system_dialogs() {
 
 # Fails unless the sample is the resumed activity (not the launcher, a dialog or a crash screen).
 require_sample_in_front() {
-  if ! adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" | grep -q "$PKG"; then
+  if ! sample_in_front; then
     echo "The sample is not in front; refusing to capture a broken screenshot." >&2
     adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" >&2 || true
     exit 1
